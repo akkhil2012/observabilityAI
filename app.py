@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import pandas as pd
+import os
 
 from AnomalyDetectionIsolationForest import LogAnomalyDetector
 
@@ -72,46 +73,50 @@ async def predict_csv(
     file: UploadFile = File(..., description="CSV file"),
     selected_features: List[str] = Query(..., description="Repeat ?selected_features=col for each feature"),
     contamination: float = Query(0.1, ge=0.01, le=0.5),
-    random_state: int = 42
+    random_state: int = 42,
+    node_id: int = Query(0, description="ID of the node being analyzed")
 ):
+    # Ensure data directory exists
+    os.makedirs('data', exist_ok=True)
+    
+    # Generate a unique filename
+    file_path = os.path.join('data', f'node_{node_id}_data.csv')
+    
     try:
-        raw = await file.read()
-        df = pd.read_csv(BytesIO(raw))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not read CSV: {e}")
-
-    missing = [c for c in selected_features if c not in df.columns]
-    if missing:
-        raise HTTPException(status_code=400, detail=f"Missing columns in CSV: {missing}")
-
-    try:
-        #detector = LogAnomalyDetector(contamination=contamination, random_state=random_state)
-        print('About to call IsolationForest ------>')
-        detector = LogAnomalyDetector(contamination=contamination)
-        # Get the file path from the uploaded file
-        file_path = f"node_{node_id}_data.csv"  # Or your preferred filename
-        file_location = os.path.join('data', file_path)
-        print('file_location is =====++++++> ', file_location)
-        # Save the uploaded file first
-        with open(file_location, "wb") as f:
-            f.write(file.file.read())
-        print('file uploaded is =====++++++> ', file)
+        # Save the uploaded file
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        # Initialize the detector
+        detector = LogAnomalyDetector(
+            contamination=contamination,
+            random_state=random_state
+        )
+        
         # Call fit_predict with the file path
-        predictions, scores = detector.fit_predict(file_location, selected_features)
-        #predictions, scores = detector.fit_predict(df, selected_features)
+        predictions, scores = detector.fit_predict(file_path, selected_features)
+        
+        # Read the file again to get the number of rows
+        df = pd.read_csv(file_path)
+        
+        # Calculate summary statistics - use the raw predictions (-1 for anomaly, 1 for normal)
+        n_anom = int((predictions == -1).sum())
+        n_norm = int((predictions == 1).sum())
+
+        return PredictResponse(
+            n_rows=len(df),
+            n_features_used=len(selected_features),
+            selected_features=selected_features,
+            contamination=contamination,
+            predictions=predictions.tolist(),  # Return raw predictions (-1, 1)
+            anomaly_scores=scores.tolist(),
+            n_anomalies=n_anom,
+            n_normal=n_norm,
+        )
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Model error: {e}")
-
-    n_anom = int((pd.Series(predictions) == -1).sum())
-    n_norm = int((pd.Series(predictions) == 1).sum())
-
-    return PredictResponse(
-        n_rows=len(df),
-        n_features_used=len(selected_features),
-        selected_features=selected_features,
-        contamination=contamination,
-        predictions=list(map(int, predictions)),
-        anomaly_scores=list(map(float, scores)),
-        n_anomalies=n_anom,
-        n_normal=n_norm,
-    )
+        # Clean up the file if it exists
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
