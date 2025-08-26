@@ -125,3 +125,5 @@ This project is designed for enterprise anomaly detection and monitoring use cas
 ## Support
 
 For technical issues or feature requests, please refer to the documentation or contact the development team.
+
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
