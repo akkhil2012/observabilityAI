@@ -375,39 +375,51 @@ if st.session_state.show_graph and st.session_state.selected_subdomain:
                 # Trigger Analysis button
                 if st.button("🚀 Trigger Analysis", key=f"trigger_{node_id}"):
                     try:
-                        # Get the uploaded file from session state
+                        # Get the uploaded file path from session state
                         uploaded_file = st.session_state.uploaded_files[node_id]
-                        uploaded_file.seek(0)  # Reset file pointer
-                        df = pd.read_csv(uploaded_file)
+                        file_path = os.path.join('data', f'node_{node_id}_data.csv')
+                        
+                        # Ensure the data directory exists
+                        os.makedirs('data', exist_ok=True)
+                        
+                        # Save the file to disk
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getvalue())
                         
                         # Prepare parameters for API request
                         params = {
                             'selected_features': selected_features if selected_features else columns_list,
                             'contamination': 0.1,
-                            'random_state': 42
+                            'random_state': 42,
+                            'node_id': node_id
                         }
                         
-                        # Prepare files for API request
-                        csv_data = df.to_csv(index=False).encode('utf-8')
-                        files = {
-                            'file': ('node_data.csv', csv_data, 'text/csv')
-                        }
+                        # Prepare file for upload
+                        with open(file_path, 'rb') as f:
+                            files = {
+                                'file': (f'node_{node_id}_data.csv', f, 'text/csv')
+                            }
+                            
+                            # Make the API request
+                            response = requests.post(
+                                'http://localhost:8000/predict-csv',
+                                files=files,
+                                params=params
+                            )
                         
-                        # Make the API request
-                        response = requests.post(
-                            'http://localhost:8000/predict-csv',
-                            files=files,
-                            params=params
-                        )
                         response.raise_for_status()
                         
                         # Process and display results
                         result = response.json()
                         st.success(f"Analysis complete! Found {result['n_anomalies']} anomalies.")
                         
-                        # Display results in a DataFrame
-                        df['prediction'] = ['Anomaly' if p == -1 else 'Normal' for p in result['predictions']]
+                        # Read the file again to display results
+                        df = pd.read_csv(file_path)
+                        df['prediction'] = result['predictions']  # Use raw predictions (-1, 1)
                         df['anomaly_score'] = result['anomaly_scores']
+                        
+                        # Convert numeric predictions to labels for display
+                        df['prediction_label'] = df['prediction'].map({-1: 'Anomaly', 1: 'Normal'})
                         
                         st.markdown("**Analysis Results:**")
                         st.dataframe(df, use_container_width=True)
@@ -419,13 +431,19 @@ if st.session_state.show_graph and st.session_state.selected_subdomain:
                             "threshold_config": feature_config,
                             "subdomain": st.session_state.selected_subdomain,
                             "node_id": node_id,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         
                     except requests.exceptions.RequestException as e:
                         st.error(f"Error calling API: {str(e)}")
+                        if hasattr(e, 'response') and e.response is not None:
+                            st.error(f"Response: {e.response.text}")
                     except Exception as e:
                         st.error(f"An error occurred: {str(e)}")
+                    finally:
+                        # Clean up the temporary file
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
             elif uploaded_file is not None:
                 st.warning("⚠️ No valid columns found in the uploaded file.")
             else:
