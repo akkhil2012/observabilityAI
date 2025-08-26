@@ -411,12 +411,20 @@ if st.session_state.show_graph and st.session_state.selected_subdomain:
                         
                         # Process and display results
                         result = response.json()
+                        st.json(result)  # Debug: Show the full API response
+                        
+                        # Check if the required keys exist
+                        required_keys = ['predictions', 'anomaly_scores', 'n_anomalies']
+                        missing_keys = [key for key in required_keys if key not in result]
+                        if missing_keys:
+                            raise KeyError(f"Missing expected keys in API response: {missing_keys}")
+                        
                         st.success(f"Analysis complete! Found {result['n_anomalies']} anomalies.")
                         
                         # Read the file again to display results
                         df = pd.read_csv(file_path)
                         df['prediction'] = result['predictions']  # Use raw predictions (-1, 1)
-                        df['anomaly_score'] = result['anomaly_scores']
+                        df['anomaly_scores'] = result['anomaly_scores']
                         
                         # Convert numeric predictions to labels for display
                         df['prediction_label'] = df['prediction'].map({-1: 'Anomaly', 1: 'Normal'})
@@ -427,7 +435,10 @@ if st.session_state.show_graph and st.session_state.selected_subdomain:
                         # Store results in session state
                         st.session_state.analysis_results[node_id] = {
                             "anomaly_count": result['n_anomalies'],
-                            "feature_values": {col: df[col].mean() for col in df.columns if col in ['prediction', 'anomaly_score']},
+                            "feature_values": {
+                                "anomaly_scores": df['anomaly_scores'].mean(),
+                                "anomaly_percentage": (df['prediction'] == -1).mean() * 100
+                            },
                             "threshold_config": feature_config,
                             "subdomain": st.session_state.selected_subdomain,
                             "node_id": node_id,
